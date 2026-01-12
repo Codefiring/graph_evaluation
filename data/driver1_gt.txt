@@ -1,0 +1,5 @@
+"INIT","open","OPENED"
+"OPENED","read","READING"
+"OPENED","write","WRITING"
+"READING","close","CLOSED"
+"WRITING","close","CLOSED"

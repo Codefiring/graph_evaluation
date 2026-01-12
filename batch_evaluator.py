@@ -92,6 +92,7 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
     # 存储所有结果
     all_results = []
     summary_results = []
+    failed_drivers = []
     
     # 遍历每个驱动
     drivers = config['drivers']
@@ -165,22 +166,45 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
             })
             
         except Exception as e:
-            print(f"Error evaluating driver {driver_name}: {e}", file=sys.stderr)
+            error_msg = f"Error evaluating driver {driver_name}: {e}"
+            print(error_msg, file=sys.stderr)
+            failed_drivers.append({
+                'driver_name': driver_name,
+                'error': str(e)
+            })
             if verbose:
                 import traceback
                 traceback.print_exc()
             continue
     
     # 保存汇总结果
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
     if all_results:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
         if output_format in ['json', 'both']:
             # 保存完整结果（JSON）
+            # 为了保持向后兼容，直接保存结果列表
+            # 如果有关键信息，可以添加元数据文件
             full_output_file = output_path / f"all_results_{timestamp}.json"
             save_results_json(all_results, str(full_output_file))
+            
+            # 如果有失败的驱动，单独保存失败信息
+            if failed_drivers:
+                failed_file = output_path / f"failed_drivers_{timestamp}.json"
+                failed_data = {
+                    'total_drivers': total,
+                    'successful_count': len(all_results),
+                    'failed_count': len(failed_drivers),
+                    'failed_drivers': failed_drivers
+                }
+                save_results_json(failed_data, str(failed_file))
+                if verbose:
+                    print(f"Failed drivers info saved to: {failed_file}")
             if verbose:
                 print(f"\nAll results saved to: {full_output_file}")
+                print(f"  - Successfully evaluated: {len(all_results)}/{total} drivers")
+                if failed_drivers:
+                    print(f"  - Failed: {len(failed_drivers)} drivers")
         
         if output_format in ['csv', 'both']:
             # 保存摘要结果（CSV）
@@ -199,13 +223,21 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
                 print("\n" + "="*80)
                 print("Overall Summary")
                 print("="*80)
-                print(f"Total drivers evaluated: {len(summary_results)}")
+                print(f"Total drivers evaluated: {len(summary_results)}/{total}")
+                if failed_drivers:
+                    print(f"Failed drivers: {len(failed_drivers)}")
+                    for fd in failed_drivers:
+                        print(f"  - {fd['driver_name']}: {fd['error']}")
                 print(f"Average Precision: {avg_precision:.4f}")
                 print(f"Average Recall:    {avg_recall:.4f}")
                 print(f"Average F1 Score:   {avg_f1:.4f}")
                 print("="*80)
     else:
-        print("No results to save", file=sys.stderr)
+        print("No results to save - all drivers failed", file=sys.stderr)
+        if failed_drivers:
+            print("Failed drivers:", file=sys.stderr)
+            for fd in failed_drivers:
+                print(f"  - {fd['driver_name']}: {fd['error']}", file=sys.stderr)
 
 
 def main():

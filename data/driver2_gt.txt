@@ -1,0 +1,5 @@
+"IDLE","start","RUNNING"
+"RUNNING","pause","PAUSED"
+"PAUSED","resume","RUNNING"
+"RUNNING","stop","STOPPED"
+"STOPPED","reset","IDLE"

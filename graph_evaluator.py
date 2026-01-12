@@ -312,8 +312,14 @@ def evaluate_graphs(gt_file: str, pred_file: str, max_length: int,
     return results
 
 
-def save_results_json(results: Dict, output_file: str):
-    """将评估结果保存为JSON格式"""
+def save_results_json(results, output_file: str):
+    """
+    将评估结果保存为JSON格式
+    
+    Args:
+        results: 可以是单个结果字典(Dict)或结果列表(List[Dict])
+        output_file: 输出文件路径
+    """
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
