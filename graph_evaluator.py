@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 """
-图评估算法：评估驱动ioctl状态转换图的预测结果
-
-输入：
-- ground truth文件
-- 预测结果文件
-- 最大序列长度k
-
-输出：
-- 序列级precision
-- 序列级recall
-- 其他评估指标
+图评估算法核心模块：评估驱动ioctl状态转换图的预测结果
 """
 
 import sys
 from collections import defaultdict, deque
-from typing import Set, List, Tuple, Dict
-import argparse
+from typing import Set, List, Tuple, Dict, Optional
+import json
+import csv
+from pathlib import Path
 
 
 class StateGraph:
@@ -166,41 +158,51 @@ def parse_graph_file(filepath: str) -> StateGraph:
     """
     解析状态转换图文件
     
-    文件格式：每行是 "old_state,ioctl,new_state"
+    文件格式：每行是 "old_state","ioctl","new_state" (CSV格式，字段用引号包围)
+    示例：
+        "NPU_VERTEX_OPEN","npu_vertex_s_graph","NPU_VERTEX_GRAPH"
     """
     graph = StateGraph()
     
+    line_num = 0
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
+            # 使用csv.reader正确解析带引号的CSV格式
+            csv_reader = csv.reader(f, quotechar='"', skipinitialspace=True)
+            for line_num, row in enumerate(csv_reader, 1):
+                # 跳过空行
+                if not row or all(not field.strip() for field in row):
                     continue
                 
-                # 解析CSV格式，处理引号
-                parts = [p.strip().strip('"') for p in line.split(',')]
-                if len(parts) < 3:
-                    print(f"Warning: Line {line_num} has invalid format: {line}", file=sys.stderr)
+                # 检查字段数量
+                if len(row) < 3:
+                    print(f"Warning: Line {line_num} has invalid format (expected 3 fields, got {len(row)}): {row}", file=sys.stderr)
                     continue
                 
-                old_state = parts[0]
-                ioctl = parts[1]
-                new_state = parts[2]
+                # 去除每个字段的前后空白
+                old_state = row[0].strip()
+                ioctl = row[1].strip()
+                new_state = row[2].strip()
+                
+                # 检查字段是否为空
+                if not old_state or not ioctl or not new_state:
+                    print(f"Warning: Line {line_num} has empty field: {row}", file=sys.stderr)
+                    continue
                 
                 graph.add_transition(old_state, ioctl, new_state)
     except FileNotFoundError:
-        print(f"Error: File not found: {filepath}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"File not found: {filepath}")
+    except csv.Error as e:
+        raise Exception(f"CSV parsing error in file {filepath} at line {line_num}: {e}")
     except Exception as e:
-        print(f"Error reading file {filepath}: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise Exception(f"Error reading file {filepath}: {e}")
     
     return graph
 
 
 def evaluate_graphs(gt_file: str, pred_file: str, max_length: int, 
                     use_sampling: bool = False, sample_size: int = 10000,
-                    max_sequences: int = None) -> Dict[str, float]:
+                    max_sequences: int = None, verbose: bool = True) -> Dict:
     """
     评估两个状态转换图
     
@@ -211,37 +213,67 @@ def evaluate_graphs(gt_file: str, pred_file: str, max_length: int,
         use_sampling: 是否使用采样（当分支太多时）
         sample_size: 采样数量
         max_sequences: 最大序列数量限制
+        verbose: 是否输出详细信息
     
     Returns:
-        评估指标字典
+        评估指标字典，包含：
+        - precision: 序列级precision
+        - recall: 序列级recall
+        - f1_score: F1分数
+        - gt_sequences: ground truth序列数
+        - pred_sequences: 预测序列数
+        - common_sequences: 共同序列数
+        - false_positives: 假阳性数量
+        - false_negatives: 假阴性数量
+        - gt_stats: ground truth统计信息
+        - pred_stats: 预测结果统计信息
     """
     # 解析两个图
-    print(f"Parsing ground truth file: {gt_file}")
+    if verbose:
+        print(f"Parsing ground truth file: {gt_file}")
     gt_graph = parse_graph_file(gt_file)
     
-    print(f"Parsing prediction file: {pred_file}")
+    if verbose:
+        print(f"Parsing prediction file: {pred_file}")
     pred_graph = parse_graph_file(pred_file)
     
-    print(f"Ground truth: {len(gt_graph.states)} states, {len(gt_graph.ioctls)} ioctls, {len(gt_graph.transitions)} transitions")
-    print(f"Prediction: {len(pred_graph.states)} states, {len(pred_graph.ioctls)} ioctls, {len(pred_graph.transitions)} transitions")
+    gt_stats = {
+        'states': len(gt_graph.states),
+        'ioctls': len(gt_graph.ioctls),
+        'transitions': len(gt_graph.transitions)
+    }
+    
+    pred_stats = {
+        'states': len(pred_graph.states),
+        'ioctls': len(pred_graph.ioctls),
+        'transitions': len(pred_graph.transitions)
+    }
+    
+    if verbose:
+        print(f"Ground truth: {gt_stats['states']} states, {gt_stats['ioctls']} ioctls, {gt_stats['transitions']} transitions")
+        print(f"Prediction: {pred_stats['states']} states, {pred_stats['ioctls']} ioctls, {pred_stats['transitions']} transitions")
     
     # 生成序列
-    print(f"\nGenerating sequences (max_length={max_length})...")
+    if verbose:
+        print(f"\nGenerating sequences (max_length={max_length})...")
     
     if use_sampling:
-        print("Using sampling method...")
+        if verbose:
+            print("Using sampling method...")
         gt_sequences = gt_graph.generate_sequences_sampled(max_length, sample_size)
         pred_sequences = pred_graph.generate_sequences_sampled(max_length, sample_size)
     else:
         gt_sequences = gt_graph.generate_sequences(max_length, max_sequences)
         pred_sequences = pred_graph.generate_sequences(max_length, max_sequences)
     
-    print(f"Ground truth sequences: {len(gt_sequences)}")
-    print(f"Prediction sequences: {len(pred_sequences)}")
+    if verbose:
+        print(f"Ground truth sequences: {len(gt_sequences)}")
+        print(f"Prediction sequences: {len(pred_sequences)}")
     
     # 计算交集
     intersection = gt_sequences & pred_sequences
-    print(f"Common sequences: {len(intersection)}")
+    if verbose:
+        print(f"Common sequences: {len(intersection)}")
     
     # 计算precision和recall
     if len(pred_sequences) > 0:
@@ -273,60 +305,55 @@ def evaluate_graphs(gt_file: str, pred_file: str, max_length: int,
         'common_sequences': len(intersection),
         'false_positives': len(false_positives),
         'false_negatives': len(false_negatives),
+        'gt_stats': gt_stats,
+        'pred_stats': pred_stats,
     }
     
     return results
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='评估驱动ioctl状态转换图的预测结果',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  python graph_evaluator.py gt.txt pred.txt --max-length 5
-  python graph_evaluator.py gt.txt pred.txt --max-length 6 --sampling --sample-size 50000
-        """
-    )
-    
-    parser.add_argument('gt_file', help='Ground truth文件路径')
-    parser.add_argument('pred_file', help='预测结果文件路径')
-    parser.add_argument('--max-length', '-k', type=int, default=5,
-                       help='最大序列长度k (默认: 5)')
-    parser.add_argument('--sampling', action='store_true',
-                       help='使用采样方法（当分支太多时）')
-    parser.add_argument('--sample-size', type=int, default=10000,
-                       help='采样数量 (默认: 10000)')
-    parser.add_argument('--max-sequences', type=int, default=None,
-                       help='最大序列数量限制（用于控制内存）')
-    
-    args = parser.parse_args()
-    
-    # 执行评估
-    results = evaluate_graphs(
-        args.gt_file,
-        args.pred_file,
-        args.max_length,
-        use_sampling=args.sampling,
-        sample_size=args.sample_size,
-        max_sequences=args.max_sequences
-    )
-    
-    # 输出结果
-    print("\n" + "="*60)
-    print("评估结果")
-    print("="*60)
-    print(f"序列级 Precision: {results['precision']:.4f}")
-    print(f"序列级 Recall:     {results['recall']:.4f}")
-    print(f"F1 Score:          {results['f1_score']:.4f}")
-    print(f"\n详细统计:")
-    print(f"  Ground truth 序列数:  {results['gt_sequences']}")
-    print(f"  预测结果序列数:       {results['pred_sequences']}")
-    print(f"  共同序列数:           {results['common_sequences']}")
-    print(f"  假阳性 (False Pos):   {results['false_positives']}")
-    print(f"  假阴性 (False Neg):   {results['false_negatives']}")
-    print("="*60)
+def save_results_json(results: Dict, output_file: str):
+    """将评估结果保存为JSON格式"""
+    with open(output_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
 
 
-if __name__ == '__main__':
-    main()
+def save_results_csv(results_list: List[Dict], output_file: str):
+    """
+    将多个驱动的评估结果保存为CSV格式
+    
+    Args:
+        results_list: 结果列表，每个元素包含 'driver_name' 和评估指标
+        output_file: 输出文件路径
+    """
+    if not results_list:
+        return
+    
+    # 获取所有字段名
+    fieldnames = ['driver_name']
+    # 从第一个结果中提取所有指标字段（排除driver_name）
+    for key in results_list[0].keys():
+        if key != 'driver_name':
+            if isinstance(results_list[0][key], dict):
+                # 如果是嵌套字典，展开
+                for sub_key in results_list[0][key].keys():
+                    fieldnames.append(f"{key}_{sub_key}")
+            else:
+                fieldnames.append(key)
+    
+    with open(output_file, 'w', encoding='utf-8', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for result in results_list:
+            row = {'driver_name': result.get('driver_name', '')}
+            for key, value in result.items():
+                if key == 'driver_name':
+                    continue
+                if isinstance(value, dict):
+                    # 展开嵌套字典
+                    for sub_key, sub_value in value.items():
+                        row[f"{key}_{sub_key}"] = sub_value
+                else:
+                    row[key] = value
+            writer.writerow(row)

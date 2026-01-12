@@ -1,0 +1,28 @@
+{
+  "parameters": {
+    "max_length": 5,
+    "use_sampling": false,
+    "sample_size": 10000,
+    "max_sequences": null
+  },
+  "drivers": [
+    {
+      "name": "driver1",
+      "gt_file": "data/driver1_gt.txt",
+      "pred_file": "data/driver1_pred.txt"
+    },
+    {
+      "name": "driver2",
+      "gt_file": "data/driver2_gt.txt",
+      "pred_file": "data/driver2_pred.txt",
+      "max_length": 6,
+      "use_sampling": true,
+      "sample_size": 50000
+    },
+    {
+      "name": "npu_vertex",
+      "gt_file": "data/example_gt.txt",
+      "pred_file": "data/example_pred.txt"
+    }
+  ]
+}
