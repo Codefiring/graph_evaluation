@@ -313,6 +313,162 @@ def evaluate_graphs(gt_file: str, pred_file: str, max_length: int,
     return results
 
 
+def find_topology_mapping(gt_graph: StateGraph, pred_graph: StateGraph) -> Dict[str, str]:
+    """
+    找到两个图之间的状态映射，基于拓扑结构相似性
+    
+    使用贪心算法，基于以下特征匹配状态：
+    1. 节点的度（入度+出度）
+    2. 连接的ioctl操作集合
+    3. 连接的ioctl操作的模式（作为输入/输出的ioctl）
+    
+    Returns:
+        从pred_graph状态名到gt_graph状态名的映射字典
+    """
+    from collections import defaultdict
+    
+    # 计算每个状态的拓扑特征
+    def compute_node_features(graph: StateGraph, state: str) -> Tuple[int, int, Set[str], Set[str]]:
+        """返回 (入度, 出度, 输入ioctl集合, 输出ioctl集合)"""
+        in_ioctls = set()
+        out_ioctls = set()
+        in_degree = 0
+        out_degree = 0
+        
+        for (old_state, ioctl), new_state in graph.transitions.items():
+            if old_state == state:
+                out_ioctls.add(ioctl)
+                out_degree += 1
+            if new_state == state:
+                in_ioctls.add(ioctl)
+                in_degree += 1
+        
+        return (in_degree, out_degree, in_ioctls, out_ioctls)
+    
+    # 为每个状态计算特征
+    gt_features = {}
+    for state in gt_graph.states:
+        gt_features[state] = compute_node_features(gt_graph, state)
+    
+    pred_features = {}
+    for state in pred_graph.states:
+        pred_features[state] = compute_node_features(pred_graph, state)
+    
+    # 贪心匹配：为每个pred状态找到最相似的gt状态
+    mapping = {}
+    used_gt_states = set()
+    
+    # 按特征相似度排序候选匹配
+    for pred_state, pred_feat in pred_features.items():
+        best_match = None
+        best_score = -1
+        
+        for gt_state, gt_feat in gt_features.items():
+            if gt_state in used_gt_states:
+                continue
+            
+            # 计算相似度分数
+            # 1. 度匹配（权重0.3）
+            degree_score = 0.0
+            if pred_feat[0] == gt_feat[0] and pred_feat[1] == gt_feat[1]:
+                degree_score = 1.0
+            elif abs(pred_feat[0] - gt_feat[0]) + abs(pred_feat[1] - gt_feat[1]) <= 1:
+                degree_score = 0.5
+            
+            # 2. ioctl集合匹配（权重0.7）
+            in_ioctl_match = len(pred_feat[2] & gt_feat[2]) / max(len(pred_feat[2] | gt_feat[2]), 1)
+            out_ioctl_match = len(pred_feat[3] & gt_feat[3]) / max(len(pred_feat[3] | gt_feat[3]), 1)
+            ioctl_score = (in_ioctl_match + out_ioctl_match) / 2
+            
+            # 综合分数
+            score = 0.3 * degree_score + 0.7 * ioctl_score
+            
+            if score > best_score:
+                best_score = score
+                best_match = gt_state
+        
+        if best_match and best_score > 0.1:  # 阈值，避免错误匹配
+            mapping[pred_state] = best_match
+            used_gt_states.add(best_match)
+    
+    return mapping
+
+
+def compute_topology_based_edit_distance(gt_graph: StateGraph, pred_graph: StateGraph,
+                                         node_ins_cost: float = 1.0, node_del_cost: float = 1.0,
+                                         edge_ins_cost: float = 1.0, edge_del_cost: float = 1.0) -> Dict:
+    """
+    基于拓扑结构的图编辑距离计算
+    
+    首先找到状态映射，然后基于映射后的状态名称比较图结构。
+    如果无法找到映射，则基于ioctl操作的模式来比较。
+    """
+    # 找到状态映射
+    state_mapping = find_topology_mapping(gt_graph, pred_graph)
+    
+    # 创建映射后的pred图（使用gt的状态名称）
+    mapped_pred_edges = set()
+    for (old_state, ioctl), new_state in pred_graph.transitions.items():
+        mapped_old = state_mapping.get(old_state, old_state)
+        mapped_new = state_mapping.get(new_state, new_state)
+        mapped_pred_edges.add((mapped_old, ioctl, mapped_new))
+    
+    # GT图的边集合
+    gt_edges = set((old_state, ioctl, new_state)
+                   for (old_state, ioctl), new_state in gt_graph.transitions.items())
+    
+    # 计算编辑距离
+    edge_deletions = gt_edges - mapped_pred_edges
+    edge_insertions = mapped_pred_edges - gt_edges
+    
+    # 节点匹配情况
+    mapped_pred_nodes = set(state_mapping.values())
+    gt_nodes = set(gt_graph.states)
+    pred_nodes = set(pred_graph.states)
+    
+    node_deletions = gt_nodes - mapped_pred_nodes
+    node_insertions = set(pred_nodes) - set(state_mapping.keys())
+    
+    edit_cost = (
+        node_del_cost * len(node_deletions) +
+        node_ins_cost * len(node_insertions) +
+        edge_del_cost * len(edge_deletions) +
+        edge_ins_cost * len(edge_insertions)
+    )
+    
+    denom = (
+        node_del_cost * len(gt_nodes) +
+        node_ins_cost * len(pred_nodes) +
+        edge_del_cost * len(gt_edges) +
+        edge_ins_cost * len(mapped_pred_edges)
+    )
+    
+    normalized_distance = (edit_cost / denom) if denom > 0 else 0.0
+    similarity = 1.0 - normalized_distance
+    
+    return {
+        'edit_distance': edit_cost,
+        'normalized_distance': normalized_distance,
+        'similarity': similarity,
+        'node_deletions': len(node_deletions),
+        'node_insertions': len(node_insertions),
+        'edge_deletions': len(edge_deletions),
+        'edge_insertions': len(edge_insertions),
+        'state_mapping': state_mapping,
+        'mapping_coverage': len(state_mapping) / max(len(pred_nodes), 1),
+        'gt_stats': {
+            'states': len(gt_nodes),
+            'ioctls': len(gt_graph.ioctls),
+            'transitions': len(gt_edges)
+        },
+        'pred_stats': {
+            'states': len(pred_nodes),
+            'ioctls': len(pred_graph.ioctls),
+            'transitions': len(pred_graph.transitions)
+        }
+    }
+
+
 def compute_graph_edit_distance(gt_graph: StateGraph, pred_graph: StateGraph,
                                 node_ins_cost: float = 1.0, node_del_cost: float = 1.0,
                                 edge_ins_cost: float = 1.0, edge_del_cost: float = 1.0) -> Dict:
@@ -395,6 +551,137 @@ def evaluate_graphs_edit_distance(gt_file: str, pred_file: str, verbose: bool = 
         edge_del_cost=edge_del_cost
     )
     results['metric'] = 'edit_distance'
+    return results
+
+
+def evaluate_graphs_topology(gt_file: str, pred_file: str, max_length: int = 5,
+                             use_sampling: bool = False, sample_size: int = 10000,
+                             max_sequences: int = None, verbose: bool = True,
+                             node_ins_cost: float = 1.0, node_del_cost: float = 1.0,
+                             edge_ins_cost: float = 1.0, edge_del_cost: float = 1.0) -> Dict:
+    """
+    基于拓扑结构的图评估算法
+    
+    评估两个状态转换图，即使状态名称不同，只要拓扑结构相同就能正确评估。
+    结合了序列评估和拓扑编辑距离两种方法。
+    
+    Args:
+        gt_file: ground truth文件路径
+        pred_file: 预测结果文件路径
+        max_length: 最大序列长度k
+        use_sampling: 是否使用采样
+        sample_size: 采样数量
+        max_sequences: 最大序列数量限制
+        verbose: 是否输出详细信息
+        node_ins_cost, node_del_cost, edge_ins_cost, edge_del_cost: 编辑距离成本
+    
+    Returns:
+        评估指标字典
+    """
+    if verbose:
+        print(f"Parsing ground truth file: {gt_file}")
+    gt_graph = parse_graph_file(gt_file)
+    
+    if verbose:
+        print(f"Parsing prediction file: {pred_file}")
+    pred_graph = parse_graph_file(pred_file)
+    
+    # 找到状态映射
+    if verbose:
+        print("\nFinding topology-based state mapping...")
+    state_mapping = find_topology_mapping(gt_graph, pred_graph)
+    
+    if verbose:
+        print(f"Found {len(state_mapping)} state mappings:")
+        for pred_state, gt_state in state_mapping.items():
+            print(f"  {pred_state} -> {gt_state}")
+    
+    # 创建映射后的pred图（用于序列比较）
+    mapped_pred_graph = StateGraph()
+    for (old_state, ioctl), new_state in pred_graph.transitions.items():
+        mapped_old = state_mapping.get(old_state, old_state)
+        mapped_new = state_mapping.get(new_state, new_state)
+        mapped_pred_graph.add_transition(mapped_old, ioctl, mapped_new)
+    
+    # 基于拓扑的编辑距离
+    edit_results = compute_topology_based_edit_distance(
+        gt_graph, pred_graph,
+        node_ins_cost=node_ins_cost,
+        node_del_cost=node_del_cost,
+        edge_ins_cost=edge_ins_cost,
+        edge_del_cost=edge_del_cost
+    )
+    
+    # 基于映射后的序列评估
+    if verbose:
+        print(f"\nGenerating sequences (max_length={max_length})...")
+    
+    if use_sampling:
+        if verbose:
+            print("Using sampling method...")
+        gt_sequences = gt_graph.generate_sequences_sampled(max_length, sample_size)
+        pred_sequences = mapped_pred_graph.generate_sequences_sampled(max_length, sample_size)
+    else:
+        gt_sequences = gt_graph.generate_sequences(max_length, max_sequences)
+        pred_sequences = mapped_pred_graph.generate_sequences(max_length, max_sequences)
+    
+    if verbose:
+        print(f"Ground truth sequences: {len(gt_sequences)}")
+        print(f"Prediction sequences (mapped): {len(pred_sequences)}")
+    
+    # 计算交集
+    intersection = gt_sequences & pred_sequences
+    if verbose:
+        print(f"Common sequences: {len(intersection)}")
+    
+    # 计算precision和recall
+    if len(pred_sequences) > 0:
+        precision = len(intersection) / len(pred_sequences)
+    else:
+        precision = 0.0
+    
+    if len(gt_sequences) > 0:
+        recall = len(intersection) / len(gt_sequences)
+    else:
+        recall = 0.0
+    
+    # 计算F1 score
+    if precision + recall > 0:
+        f1 = 2 * precision * recall / (precision + recall)
+    else:
+        f1 = 0.0
+    
+    # 计算其他指标
+    false_positives = pred_sequences - gt_sequences
+    false_negatives = gt_sequences - pred_sequences
+    
+    results = {
+        'metric': 'topology',
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1,
+        'gt_sequences': len(gt_sequences),
+        'pred_sequences': len(pred_sequences),
+        'common_sequences': len(intersection),
+        'false_positives': len(false_positives),
+        'false_negatives': len(false_negatives),
+        'edit_distance': edit_results['edit_distance'],
+        'normalized_distance': edit_results['normalized_distance'],
+        'similarity': edit_results['similarity'],
+        'state_mapping': state_mapping,
+        'mapping_coverage': edit_results['mapping_coverage'],
+        'gt_stats': {
+            'states': len(gt_graph.states),
+            'ioctls': len(gt_graph.ioctls),
+            'transitions': len(gt_graph.transitions)
+        },
+        'pred_stats': {
+            'states': len(pred_graph.states),
+            'ioctls': len(pred_graph.ioctls),
+            'transitions': len(pred_graph.transitions)
+        }
+    }
+    
     return results
 
 
