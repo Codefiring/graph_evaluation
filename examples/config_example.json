@@ -3,7 +3,8 @@
     "max_length": 5,
     "use_sampling": false,
     "sample_size": 10000,
-    "max_sequences": null
+    "max_sequences": null,
+    "metric": "sequence"
   },
   "drivers": [
     {
@@ -17,7 +18,8 @@
       "pred_file": "data/driver2_pred.txt",
       "max_length": 6,
       "use_sampling": true,
-      "sample_size": 50000
+      "sample_size": 50000,
+      "metric": "edit_distance"
     },
     {
       "name": "npu_vertex",

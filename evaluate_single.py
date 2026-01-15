@@ -5,7 +5,7 @@
 
 import argparse
 import sys
-from graph_evaluator import evaluate_graphs
+from graph_evaluator import evaluate_graphs, evaluate_graphs_edit_distance
 
 
 def main():
@@ -29,34 +29,56 @@ def main():
                        help='采样数量 (默认: 10000)')
     parser.add_argument('--max-sequences', type=int, default=None,
                        help='最大序列数量限制（用于控制内存）')
+    parser.add_argument('--metric', choices=['sequence', 'edit_distance'],
+                       default='sequence',
+                       help='评估指标: sequence 或 edit_distance')
     
     args = parser.parse_args()
     
     # 执行评估
-    results = evaluate_graphs(
-        args.gt_file,
-        args.pred_file,
-        args.max_length,
-        use_sampling=args.sampling,
-        sample_size=args.sample_size,
-        max_sequences=args.max_sequences,
-        verbose=True
-    )
-    
-    # 输出结果
-    print("\n" + "="*60)
-    print("评估结果")
-    print("="*60)
-    print(f"序列级 Precision: {results['precision']:.4f}")
-    print(f"序列级 Recall:     {results['recall']:.4f}")
-    print(f"F1 Score:          {results['f1_score']:.4f}")
-    print(f"\n详细统计:")
-    print(f"  Ground truth 序列数:  {results['gt_sequences']}")
-    print(f"  预测结果序列数:       {results['pred_sequences']}")
-    print(f"  共同序列数:           {results['common_sequences']}")
-    print(f"  假阳性 (False Pos):   {results['false_positives']}")
-    print(f"  假阴性 (False Neg):   {results['false_negatives']}")
-    print("="*60)
+    if args.metric == 'sequence':
+        results = evaluate_graphs(
+            args.gt_file,
+            args.pred_file,
+            args.max_length,
+            use_sampling=args.sampling,
+            sample_size=args.sample_size,
+            max_sequences=args.max_sequences,
+            verbose=True
+        )
+        
+        # 输出结果
+        print("\n" + "="*60)
+        print("评估结果")
+        print("="*60)
+        print(f"序列级 Precision: {results['precision']:.4f}")
+        print(f"序列级 Recall:     {results['recall']:.4f}")
+        print(f"F1 Score:          {results['f1_score']:.4f}")
+        print(f"\n详细统计:")
+        print(f"  Ground truth 序列数:  {results['gt_sequences']}")
+        print(f"  预测结果序列数:       {results['pred_sequences']}")
+        print(f"  共同序列数:           {results['common_sequences']}")
+        print(f"  假阳性 (False Pos):   {results['false_positives']}")
+        print(f"  假阴性 (False Neg):   {results['false_negatives']}")
+        print("="*60)
+    else:
+        results = evaluate_graphs_edit_distance(
+            args.gt_file,
+            args.pred_file,
+            verbose=True
+        )
+        print("\n" + "="*60)
+        print("评估结果")
+        print("="*60)
+        print(f"编辑距离:         {results['edit_distance']:.4f}")
+        print(f"归一化距离:       {results['normalized_distance']:.4f}")
+        print(f"相似度:           {results['similarity']:.4f}")
+        print(f"\n详细统计:")
+        print(f"  节点插入: {results['node_insertions']}")
+        print(f"  节点删除: {results['node_deletions']}")
+        print(f"  边插入:   {results['edge_insertions']}")
+        print(f"  边删除:   {results['edge_deletions']}")
+        print("="*60)
 
 
 if __name__ == '__main__':

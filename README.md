@@ -19,6 +19,13 @@
    - **Recall**: ground truth允许的序列，有多少被预测结果也允许
    - **F1 Score**: Precision和Recall的调和平均
 
+### Edit Distance Metric
+
+An optional metric based on graph edit distance is available. It uses exact
+node name matching and edge matching by (old_state, ioctl, new_state). The
+edit distance counts insertions/deletions for nodes and edges, and reports a
+normalized distance and similarity score.
+
 ## 使用方法
 
 ### 方式一：批量评估（推荐）
@@ -39,7 +46,8 @@ python batch_evaluator.py config.json
     "max_length": 5,
     "use_sampling": false,
     "sample_size": 10000,
-    "max_sequences": null
+    "max_sequences": null,
+    "metric": "sequence"
   },
   "drivers": [
     {
@@ -53,7 +61,8 @@ python batch_evaluator.py config.json
       "pred_file": "data/driver2_pred.txt",
       "max_length": 6,
       "use_sampling": true,
-      "sample_size": 50000
+      "sample_size": 50000,
+      "metric": "edit_distance"
     }
   ]
 }
@@ -65,11 +74,13 @@ python batch_evaluator.py config.json
   - `use_sampling`: 是否使用采样方法
   - `sample_size`: 采样数量
   - `max_sequences`: 最大序列数量限制
+  - `metric`: 评估指标，可选 `sequence` 或 `edit_distance`
 - `drivers`: 驱动列表
   - `name`: 驱动名称（用于结果文件命名）
   - `gt_file`: Ground truth文件路径
   - `pred_file`: 预测结果文件路径
   - 每个驱动可以覆盖全局参数（可选）
+  - `metric`: 评估指标，可选 `sequence` 或 `edit_distance`
 
 #### 批量评估参数
 
@@ -77,15 +88,16 @@ python batch_evaluator.py config.json
 python batch_evaluator.py <config_file> [选项]
 
 选项:
-  --output-dir, -o    输出目录 (默认: results)
+  --output-dir, -o    输出目录 (默认: result)
   --format, -f        输出格式: json, csv, 或 both (默认: both)
   --quiet, -q         静默模式，不输出详细信息
 ```
 
 #### 输出结果
 
-批量评估会在输出目录生成以下文件：
-- `{driver_name}_result.json`: 每个驱动的详细评估结果（JSON格式）
+批量评估会在输出目录生成以下文件（每次评估一个 `run_{timestamp}` 目录）：
+- `{driver_name}/{driver_name}_result.json`: 每个驱动的详细评估结果（JSON格式）
+- `{driver_name}/{driver_name}_gt.txt` 与 `{driver_name}/{driver_name}_pred.txt`: 本次评估的输入快照
 - `all_results_{timestamp}.json`: 所有驱动的完整结果汇总（JSON格式）
 - `summary_{timestamp}.csv`: 所有驱动的摘要结果（CSV格式，便于Excel分析）
 
@@ -105,6 +117,7 @@ python evaluate_single.py <gt_file> <pred_file> [选项]
 - `--sampling`: 使用采样方法（当分支太多时）
 - `--sample-size`: 采样数量（默认: 10000）
 - `--max-sequences`: 最大序列数量限制（用于控制内存）
+- `--metric`: 评估指标，可选 `sequence` 或 `edit_distance`
 
 #### 示例
 
@@ -204,7 +217,14 @@ graph_evaluation/
 │   └── example_pred.txt    # 示例预测文件
 ├── examples/               # 示例配置目录
 │   └── config_example.json # 配置文件示例
-└── results/                # 结果输出目录（自动创建，已加入.gitignore）
+└── result/                 # 结果输出目录（自动创建，已加入.gitignore）
+    └── run_YYYYMMDD_HHMMSS/
+        ├── driver_name/
+        │   ├── driver_name_result.json
+        │   ├── driver_name_gt.txt
+        │   └── driver_name_pred.txt
+        ├── all_results_YYYYMMDD_HHMMSS.json
+        └── summary_YYYYMMDD_HHMMSS.csv
 ```
 
 ## 注意事项
@@ -223,6 +243,6 @@ graph_evaluation/
    python batch_evaluator.py config.json
    ```
 3. 查看结果：
-   - 详细结果：`results/{driver_name}_result.json`
-   - 汇总结果：`results/all_results_{timestamp}.json`
-   - CSV摘要：`results/summary_{timestamp}.csv`
+   - 详细结果：`result/run_{timestamp}/{driver_name}/{driver_name}_result.json`
+   - 汇总结果：`result/run_{timestamp}/all_results_{timestamp}.json`
+   - CSV摘要：`result/run_{timestamp}/summary_{timestamp}.csv`

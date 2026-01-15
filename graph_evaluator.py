@@ -297,6 +297,7 @@ def evaluate_graphs(gt_file: str, pred_file: str, max_length: int,
     false_negatives = gt_sequences - pred_sequences
     
     results = {
+        'metric': 'sequence',
         'precision': precision,
         'recall': recall,
         'f1_score': f1,
@@ -309,6 +310,91 @@ def evaluate_graphs(gt_file: str, pred_file: str, max_length: int,
         'pred_stats': pred_stats,
     }
     
+    return results
+
+
+def compute_graph_edit_distance(gt_graph: StateGraph, pred_graph: StateGraph,
+                                node_ins_cost: float = 1.0, node_del_cost: float = 1.0,
+                                edge_ins_cost: float = 1.0, edge_del_cost: float = 1.0) -> Dict:
+    """
+    Compute a simple graph edit distance based on exact node/edge label matching.
+
+    Nodes are matched by name; edges are matched by (old_state, ioctl, new_state).
+    """
+    gt_nodes = set(gt_graph.states)
+    pred_nodes = set(pred_graph.states)
+
+    gt_edges = set((old_state, ioctl, new_state)
+                   for (old_state, ioctl), new_state in gt_graph.transitions.items())
+    pred_edges = set((old_state, ioctl, new_state)
+                     for (old_state, ioctl), new_state in pred_graph.transitions.items())
+
+    node_deletions = gt_nodes - pred_nodes
+    node_insertions = pred_nodes - gt_nodes
+    edge_deletions = gt_edges - pred_edges
+    edge_insertions = pred_edges - gt_edges
+
+    edit_cost = (
+        node_del_cost * len(node_deletions) +
+        node_ins_cost * len(node_insertions) +
+        edge_del_cost * len(edge_deletions) +
+        edge_ins_cost * len(edge_insertions)
+    )
+
+    denom = (
+        node_del_cost * len(gt_nodes) +
+        node_ins_cost * len(pred_nodes) +
+        edge_del_cost * len(gt_edges) +
+        edge_ins_cost * len(pred_edges)
+    )
+
+    normalized_distance = (edit_cost / denom) if denom > 0 else 0.0
+    similarity = 1.0 - normalized_distance
+
+    return {
+        'edit_distance': edit_cost,
+        'normalized_distance': normalized_distance,
+        'similarity': similarity,
+        'node_deletions': len(node_deletions),
+        'node_insertions': len(node_insertions),
+        'edge_deletions': len(edge_deletions),
+        'edge_insertions': len(edge_insertions),
+        'gt_stats': {
+            'states': len(gt_nodes),
+            'ioctls': len(gt_graph.ioctls),
+            'transitions': len(gt_edges)
+        },
+        'pred_stats': {
+            'states': len(pred_nodes),
+            'ioctls': len(pred_graph.ioctls),
+            'transitions': len(pred_edges)
+        }
+    }
+
+
+def evaluate_graphs_edit_distance(gt_file: str, pred_file: str, verbose: bool = True,
+                                  node_ins_cost: float = 1.0, node_del_cost: float = 1.0,
+                                  edge_ins_cost: float = 1.0, edge_del_cost: float = 1.0) -> Dict:
+    """
+    Evaluate two graphs using a simple graph edit distance.
+    """
+    if verbose:
+        print(f"Parsing ground truth file: {gt_file}")
+    gt_graph = parse_graph_file(gt_file)
+
+    if verbose:
+        print(f"Parsing prediction file: {pred_file}")
+    pred_graph = parse_graph_file(pred_file)
+
+    results = compute_graph_edit_distance(
+        gt_graph,
+        pred_graph,
+        node_ins_cost=node_ins_cost,
+        node_del_cost=node_del_cost,
+        edge_ins_cost=edge_ins_cost,
+        edge_del_cost=edge_del_cost
+    )
+    results['metric'] = 'edit_distance'
     return results
 
 

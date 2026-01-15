@@ -9,8 +9,9 @@ import sys
 from pathlib import Path
 from typing import List, Dict
 from datetime import datetime
+import shutil
 
-from graph_evaluator import evaluate_graphs, save_results_json, save_results_csv
+from graph_evaluator import evaluate_graphs, evaluate_graphs_edit_distance, save_results_json, save_results_csv
 
 
 def load_config(config_file: str) -> Dict:
@@ -60,7 +61,7 @@ def validate_config(config: Dict) -> bool:
     return True
 
 
-def batch_evaluate(config_file: str, output_dir: str = "results", 
+def batch_evaluate(config_file: str, output_dir: str = "result", 
                    output_format: str = "both", verbose: bool = True):
     """
     批量评估多个驱动
@@ -88,6 +89,10 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
     # 创建输出目录
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_path = output_path / f"run_{timestamp}"
+    run_path.mkdir(parents=True, exist_ok=True)
     
     # 存储所有结果
     all_results = []
@@ -128,7 +133,7 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
                 continue
             
             # 执行评估
-            result = evaluate_graphs(
+            sequence_result = evaluate_graphs(
                 gt_file=gt_file,
                 pred_file=pred_file,
                 max_length=driver_max_length,
@@ -137,19 +142,44 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
                 max_sequences=driver_max_sequences,
                 verbose=verbose
             )
+            edit_result = evaluate_graphs_edit_distance(
+                gt_file=gt_file,
+                pred_file=pred_file,
+                verbose=verbose
+            )
+
+            result = {
+                'metric': 'sequence+edit_distance',
+                'sequence': sequence_result,
+                'edit_distance': edit_result
+            }
             
             # 添加驱动名称
             result['driver_name'] = driver_name
             result['gt_file'] = gt_file
             result['pred_file'] = pred_file
             
+            # 创建驱动结果目录并保存输入快照
+            driver_path = run_path / driver_name
+            driver_path.mkdir(parents=True, exist_ok=True)
+            gt_snapshot = driver_path / f"{driver_name}_gt{Path(gt_file).suffix or '.txt'}"
+            pred_snapshot = driver_path / f"{driver_name}_pred{Path(pred_file).suffix or '.txt'}"
+            shutil.copy2(gt_file, gt_snapshot)
+            shutil.copy2(pred_file, pred_snapshot)
+
+            result['gt_file_original'] = gt_file
+            result['pred_file_original'] = pred_file
+            result['gt_file_snapshot'] = str(gt_snapshot)
+            result['pred_file_snapshot'] = str(pred_snapshot)
+
             # 保存单个驱动的结果
-            driver_output_file = output_path / f"{driver_name}_result.json"
+            driver_output_file = driver_path / f"{driver_name}_result.json"
             save_results_json(result, str(driver_output_file))
             
             if verbose:
                 print(f"\nResult saved to: {driver_output_file}")
-                print(f"Precision: {result['precision']:.4f}, Recall: {result['recall']:.4f}, F1: {result['f1_score']:.4f}")
+                print(f"Precision: {sequence_result['precision']:.4f}, Recall: {sequence_result['recall']:.4f}, F1: {sequence_result['f1_score']:.4f}")
+                print(f"Edit Distance: {edit_result['edit_distance']:.4f}, Similarity: {edit_result['similarity']:.4f}")
             
             # 添加到结果列表
             all_results.append(result)
@@ -157,12 +187,15 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
             # 添加到摘要列表（只包含主要指标）
             summary_results.append({
                 'driver_name': driver_name,
-                'precision': result['precision'],
-                'recall': result['recall'],
-                'f1_score': result['f1_score'],
-                'gt_sequences': result['gt_sequences'],
-                'pred_sequences': result['pred_sequences'],
-                'common_sequences': result['common_sequences'],
+                'precision': sequence_result['precision'],
+                'recall': sequence_result['recall'],
+                'f1_score': sequence_result['f1_score'],
+                'gt_sequences': sequence_result['gt_sequences'],
+                'pred_sequences': sequence_result['pred_sequences'],
+                'common_sequences': sequence_result['common_sequences'],
+                'edit_distance': edit_result['edit_distance'],
+                'normalized_distance': edit_result['normalized_distance'],
+                'similarity': edit_result['similarity']
             })
             
         except Exception as e:
@@ -177,20 +210,17 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
                 traceback.print_exc()
             continue
     
-    # 保存汇总结果
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
     if all_results:
         if output_format in ['json', 'both']:
             # 保存完整结果（JSON）
             # 为了保持向后兼容，直接保存结果列表
             # 如果有关键信息，可以添加元数据文件
-            full_output_file = output_path / f"all_results_{timestamp}.json"
+            full_output_file = run_path / f"all_results_{timestamp}.json"
             save_results_json(all_results, str(full_output_file))
             
             # 如果有失败的驱动，单独保存失败信息
             if failed_drivers:
-                failed_file = output_path / f"failed_drivers_{timestamp}.json"
+                failed_file = run_path / f"failed_drivers_{timestamp}.json"
                 failed_data = {
                     'total_drivers': total,
                     'successful_count': len(all_results),
@@ -208,30 +238,34 @@ def batch_evaluate(config_file: str, output_dir: str = "results",
         
         if output_format in ['csv', 'both']:
             # 保存摘要结果（CSV）
-            csv_output_file = output_path / f"summary_{timestamp}.csv"
+            csv_output_file = run_path / f"summary_{timestamp}.csv"
             save_results_csv(summary_results, str(csv_output_file))
             if verbose:
                 print(f"Summary saved to: {csv_output_file}")
         
         # 计算平均指标
-        if len(summary_results) > 0:
+        if len(summary_results) > 0 and verbose:
+            print("\n" + "="*80)
+            print("Overall Summary")
+            print("="*80)
+            print(f"Total drivers evaluated: {len(summary_results)}/{total}")
+            if failed_drivers:
+                print(f"Failed drivers: {len(failed_drivers)}")
+                for fd in failed_drivers:
+                    print(f"  - {fd['driver_name']}: {fd['error']}")
             avg_precision = sum(r['precision'] for r in summary_results) / len(summary_results)
             avg_recall = sum(r['recall'] for r in summary_results) / len(summary_results)
             avg_f1 = sum(r['f1_score'] for r in summary_results) / len(summary_results)
-            
-            if verbose:
-                print("\n" + "="*80)
-                print("Overall Summary")
-                print("="*80)
-                print(f"Total drivers evaluated: {len(summary_results)}/{total}")
-                if failed_drivers:
-                    print(f"Failed drivers: {len(failed_drivers)}")
-                    for fd in failed_drivers:
-                        print(f"  - {fd['driver_name']}: {fd['error']}")
-                print(f"Average Precision: {avg_precision:.4f}")
-                print(f"Average Recall:    {avg_recall:.4f}")
-                print(f"Average F1 Score:   {avg_f1:.4f}")
-                print("="*80)
+            avg_edit_distance = sum(r['edit_distance'] for r in summary_results) / len(summary_results)
+            avg_norm = sum(r['normalized_distance'] for r in summary_results) / len(summary_results)
+            avg_similarity = sum(r['similarity'] for r in summary_results) / len(summary_results)
+            print(f"Average Precision: {avg_precision:.4f}")
+            print(f"Average Recall:    {avg_recall:.4f}")
+            print(f"Average F1 Score:  {avg_f1:.4f}")
+            print(f"Average Edit Distance: {avg_edit_distance:.4f}")
+            print(f"Average Norm Distance: {avg_norm:.4f}")
+            print(f"Average Similarity:    {avg_similarity:.4f}")
+            print("="*80)
     else:
         print("No results to save - all drivers failed", file=sys.stderr)
         if failed_drivers:
@@ -247,14 +281,14 @@ def main():
         epilog="""
 示例:
   python batch_evaluator.py config.json
-  python batch_evaluator.py config.json --output-dir results --format csv
-  python batch_evaluator.py config.json --output-dir results --format both --quiet
+  python batch_evaluator.py config.json --output-dir result --format csv
+  python batch_evaluator.py config.json --output-dir result --format both --quiet
         """
     )
     
     parser.add_argument('config_file', help='配置文件路径（JSON格式）')
-    parser.add_argument('--output-dir', '-o', default='results',
-                       help='输出目录 (默认: results)')
+    parser.add_argument('--output-dir', '-o', default='result',
+                       help='输出目录 (默认: result)')
     parser.add_argument('--format', '-f', choices=['json', 'csv', 'both'],
                        default='both', help='输出格式 (默认: both)')
     parser.add_argument('--quiet', '-q', action='store_true',

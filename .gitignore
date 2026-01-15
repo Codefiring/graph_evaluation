@@ -35,7 +35,7 @@ ENV/
 .DS_Store
 
 # Results and output
-results/
+result/
 test_results/
 *.csv
 
