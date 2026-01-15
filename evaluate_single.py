@@ -5,7 +5,7 @@
 
 import argparse
 import sys
-from graph_evaluator import evaluate_graphs, evaluate_graphs_edit_distance
+from graph_evaluator import evaluate_graphs, evaluate_graphs_edit_distance, evaluate_graphs_topology
 
 
 def main():
@@ -29,9 +29,9 @@ def main():
                        help='采样数量 (默认: 10000)')
     parser.add_argument('--max-sequences', type=int, default=None,
                        help='最大序列数量限制（用于控制内存）')
-    parser.add_argument('--metric', choices=['sequence', 'edit_distance'],
+    parser.add_argument('--metric', choices=['sequence', 'edit_distance', 'topology'],
                        default='sequence',
-                       help='评估指标: sequence 或 edit_distance')
+                       help='评估指标: sequence, edit_distance, 或 topology (基于拓扑结构)')
     
     args = parser.parse_args()
     
@@ -49,7 +49,7 @@ def main():
         
         # 输出结果
         print("\n" + "="*60)
-        print("评估结果")
+        print("评估结果 (序列方法)")
         print("="*60)
         print(f"序列级 Precision: {results['precision']:.4f}")
         print(f"序列级 Recall:     {results['recall']:.4f}")
@@ -61,14 +61,14 @@ def main():
         print(f"  假阳性 (False Pos):   {results['false_positives']}")
         print(f"  假阴性 (False Neg):   {results['false_negatives']}")
         print("="*60)
-    else:
+    elif args.metric == 'edit_distance':
         results = evaluate_graphs_edit_distance(
             args.gt_file,
             args.pred_file,
             verbose=True
         )
         print("\n" + "="*60)
-        print("评估结果")
+        print("评估结果 (编辑距离方法)")
         print("="*60)
         print(f"编辑距离:         {results['edit_distance']:.4f}")
         print(f"归一化距离:       {results['normalized_distance']:.4f}")
@@ -78,6 +78,36 @@ def main():
         print(f"  节点删除: {results['node_deletions']}")
         print(f"  边插入:   {results['edge_insertions']}")
         print(f"  边删除:   {results['edge_deletions']}")
+        print("="*60)
+    else:  # topology
+        results = evaluate_graphs_topology(
+            args.gt_file,
+            args.pred_file,
+            args.max_length,
+            use_sampling=args.sampling,
+            sample_size=args.sample_size,
+            max_sequences=args.max_sequences,
+            verbose=True
+        )
+        print("\n" + "="*60)
+        print("评估结果 (拓扑结构方法)")
+        print("="*60)
+        print(f"序列级 Precision: {results['precision']:.4f}")
+        print(f"序列级 Recall:     {results['recall']:.4f}")
+        print(f"F1 Score:          {results['f1_score']:.4f}")
+        print(f"编辑距离:         {results['edit_distance']:.4f}")
+        print(f"归一化距离:       {results['normalized_distance']:.4f}")
+        print(f"相似度:           {results['similarity']:.4f}")
+        print(f"映射覆盖率:       {results['mapping_coverage']:.4f}")
+        print(f"\n详细统计:")
+        print(f"  Ground truth 序列数:  {results['gt_sequences']}")
+        print(f"  预测结果序列数:       {results['pred_sequences']}")
+        print(f"  共同序列数:           {results['common_sequences']}")
+        print(f"  假阳性 (False Pos):   {results['false_positives']}")
+        print(f"  假阴性 (False Neg):   {results['false_negatives']}")
+        print(f"\n状态映射 ({len(results['state_mapping'])} 个):")
+        for pred_state, gt_state in results['state_mapping'].items():
+            print(f"  {pred_state} -> {gt_state}")
         print("="*60)
 
 

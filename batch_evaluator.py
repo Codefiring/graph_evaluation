@@ -11,7 +11,7 @@ from typing import List, Dict
 from datetime import datetime
 import shutil
 
-from graph_evaluator import evaluate_graphs, evaluate_graphs_edit_distance, save_results_json, save_results_csv
+from graph_evaluator import evaluate_graphs, evaluate_graphs_edit_distance, evaluate_graphs_topology, save_results_json, save_results_csv
 
 
 def load_config(config_file: str) -> Dict:
@@ -85,6 +85,7 @@ def batch_evaluate(config_file: str, output_dir: str = "result",
     use_sampling = global_params.get('use_sampling', False)
     sample_size = global_params.get('sample_size', 10000)
     max_sequences = global_params.get('max_sequences', None)
+    metric = global_params.get('metric', 'sequence')
     
     # 创建输出目录
     output_path = Path(output_dir)
@@ -117,6 +118,7 @@ def batch_evaluate(config_file: str, output_dir: str = "result",
         driver_use_sampling = driver.get('use_sampling', use_sampling)
         driver_sample_size = driver.get('sample_size', sample_size)
         driver_max_sequences = driver.get('max_sequences', max_sequences)
+        driver_metric = driver.get('metric', metric)
         
         if verbose:
             print(f"\n[{idx}/{total}] Evaluating driver: {driver_name}")
@@ -133,26 +135,41 @@ def batch_evaluate(config_file: str, output_dir: str = "result",
                 continue
             
             # 执行评估
-            sequence_result = evaluate_graphs(
-                gt_file=gt_file,
-                pred_file=pred_file,
-                max_length=driver_max_length,
-                use_sampling=driver_use_sampling,
-                sample_size=driver_sample_size,
-                max_sequences=driver_max_sequences,
-                verbose=verbose
-            )
-            edit_result = evaluate_graphs_edit_distance(
-                gt_file=gt_file,
-                pred_file=pred_file,
-                verbose=verbose
-            )
+            if driver_metric == 'topology':
+                # 使用拓扑评估方法
+                topology_result = evaluate_graphs_topology(
+                    gt_file=gt_file,
+                    pred_file=pred_file,
+                    max_length=driver_max_length,
+                    use_sampling=driver_use_sampling,
+                    sample_size=driver_sample_size,
+                    max_sequences=driver_max_sequences,
+                    verbose=verbose
+                )
+                result = topology_result
+                result['metric'] = 'topology'
+            else:
+                # 使用传统方法（序列+编辑距离）
+                sequence_result = evaluate_graphs(
+                    gt_file=gt_file,
+                    pred_file=pred_file,
+                    max_length=driver_max_length,
+                    use_sampling=driver_use_sampling,
+                    sample_size=driver_sample_size,
+                    max_sequences=driver_max_sequences,
+                    verbose=verbose
+                )
+                edit_result = evaluate_graphs_edit_distance(
+                    gt_file=gt_file,
+                    pred_file=pred_file,
+                    verbose=verbose
+                )
 
-            result = {
-                'metric': 'sequence+edit_distance',
-                'sequence': sequence_result,
-                'edit_distance': edit_result
-            }
+                result = {
+                    'metric': 'sequence+edit_distance',
+                    'sequence': sequence_result,
+                    'edit_distance': edit_result
+                }
             
             # 添加驱动名称
             result['driver_name'] = driver_name
@@ -178,25 +195,45 @@ def batch_evaluate(config_file: str, output_dir: str = "result",
             
             if verbose:
                 print(f"\nResult saved to: {driver_output_file}")
-                print(f"Precision: {sequence_result['precision']:.4f}, Recall: {sequence_result['recall']:.4f}, F1: {sequence_result['f1_score']:.4f}")
-                print(f"Edit Distance: {edit_result['edit_distance']:.4f}, Similarity: {edit_result['similarity']:.4f}")
+                if driver_metric == 'topology':
+                    print(f"Precision: {result['precision']:.4f}, Recall: {result['recall']:.4f}, F1: {result['f1_score']:.4f}")
+                    print(f"Edit Distance: {result['edit_distance']:.4f}, Similarity: {result['similarity']:.4f}")
+                    print(f"Mapping Coverage: {result['mapping_coverage']:.4f}")
+                else:
+                    print(f"Precision: {sequence_result['precision']:.4f}, Recall: {sequence_result['recall']:.4f}, F1: {sequence_result['f1_score']:.4f}")
+                    print(f"Edit Distance: {edit_result['edit_distance']:.4f}, Similarity: {edit_result['similarity']:.4f}")
             
             # 添加到结果列表
             all_results.append(result)
             
             # 添加到摘要列表（只包含主要指标）
-            summary_results.append({
-                'driver_name': driver_name,
-                'precision': sequence_result['precision'],
-                'recall': sequence_result['recall'],
-                'f1_score': sequence_result['f1_score'],
-                'gt_sequences': sequence_result['gt_sequences'],
-                'pred_sequences': sequence_result['pred_sequences'],
-                'common_sequences': sequence_result['common_sequences'],
-                'edit_distance': edit_result['edit_distance'],
-                'normalized_distance': edit_result['normalized_distance'],
-                'similarity': edit_result['similarity']
-            })
+            if driver_metric == 'topology':
+                summary_results.append({
+                    'driver_name': driver_name,
+                    'precision': result['precision'],
+                    'recall': result['recall'],
+                    'f1_score': result['f1_score'],
+                    'gt_sequences': result['gt_sequences'],
+                    'pred_sequences': result['pred_sequences'],
+                    'common_sequences': result['common_sequences'],
+                    'edit_distance': result['edit_distance'],
+                    'normalized_distance': result['normalized_distance'],
+                    'similarity': result['similarity'],
+                    'mapping_coverage': result['mapping_coverage']
+                })
+            else:
+                summary_results.append({
+                    'driver_name': driver_name,
+                    'precision': sequence_result['precision'],
+                    'recall': sequence_result['recall'],
+                    'f1_score': sequence_result['f1_score'],
+                    'gt_sequences': sequence_result['gt_sequences'],
+                    'pred_sequences': sequence_result['pred_sequences'],
+                    'common_sequences': sequence_result['common_sequences'],
+                    'edit_distance': edit_result['edit_distance'],
+                    'normalized_distance': edit_result['normalized_distance'],
+                    'similarity': edit_result['similarity']
+                })
             
         except Exception as e:
             error_msg = f"Error evaluating driver {driver_name}: {e}"
