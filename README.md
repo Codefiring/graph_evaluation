@@ -2,6 +2,47 @@
 
 用于评估驱动ioctl状态转换图的预测结果。
 
+## 环境要求
+
+本项目需要使用 **conda 环境 `opt`** 来运行 Python 代码。
+
+### 环境设置
+
+1. **检查 conda 环境是否存在**：
+   ```bash
+   conda env list
+   ```
+   如果看到 `opt` 环境，说明已存在；如果不存在，需要创建。
+
+2. **创建 conda 环境 `opt`**（如果不存在）：
+   ```bash
+   conda create -n opt python
+   ```
+
+3. **激活环境**：
+   ```bash
+   conda activate opt
+   ```
+
+4. **验证环境**：
+   ```bash
+   python --version
+   conda info --envs
+   ```
+   确认当前激活的环境是 `opt`（前面有 `*` 标记）。
+
+### 在 Cursor/VSCode 中使用
+
+- 项目已配置 `.vscode/settings.json`，Cursor 会自动使用 `opt` 环境中的 Python
+- 如果未自动识别，按 `Ctrl+Shift+P`，输入 "Python: Select Interpreter"，选择 `opt` 环境
+- 或者在终端中手动激活：`conda activate opt`
+
+### 注意事项
+
+- 每次运行 Python 代码前，请确保已激活 `opt` 环境
+- 如果使用命令行，每次打开新的终端窗口都需要重新激活环境
+- 建议在项目根目录创建激活脚本（如 `activate_opt.ps1` 或 `activate_opt.sh`）方便使用
+
 ## 功能
 
 该程序实现了基于序列的图评估算法，通过比较ground truth和预测结果的状态转换图，计算序列级的precision和recall。
@@ -237,12 +278,19 @@ graph_evaluation/
 
 ## 快速开始
 
-1. 准备配置文件（参考 `examples/config_example.json`）
-2. 运行批量评估：
+1. **激活 conda 环境 `opt`**：
+   ```bash
+   conda activate opt
+   ```
+
+2. 准备配置文件（参考 `examples/config_example.json`）
+
+3. 运行批量评估：
    ```bash
    python batch_evaluator.py config.json
    ```
-3. 查看结果：
+
+4. 查看结果：
    - 详细结果：`result/run_{timestamp}/{driver_name}/{driver_name}_result.json`
    - 汇总结果：`result/run_{timestamp}/all_results_{timestamp}.json`
    - CSV摘要：`result/run_{timestamp}/summary_{timestamp}.csv`
