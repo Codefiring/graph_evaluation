@@ -1,0 +1,4 @@
+"S1","open","S2"
+"S2","read","S3"
+"S3","close","S4"
+"S2","write","S5"
